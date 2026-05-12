@@ -1,0 +1,319 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Users table - Core user entity
+model User {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email             String    @unique
+  phone             String?   @unique
+  passwordHash      String
+  emailVerified     Boolean   @default(false)
+  mfaEnabled        Boolean   @default(false)
+  status            String    @default("active") // active, suspended, deleted
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  userRoles         UserRole[]
+  refreshTokens     RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  farmerProfile     FarmerProfile?
+  auditLogs         AuditLog[] @relation("actor")
+  kycDocuments      KycDocument[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([status])
+}
+
+// Roles - RBAC role definitions
+model Role {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String    @unique // Farmer, Warehouse Operator, Financial Institution, Admin, Super Admin
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  userRoles   UserRole[]
+  permissions RolePermission[]
+
+  @@index([name])
+}
+
+// User-Role mapping - Many-to-many relationship
+model UserRole {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid
+  roleId    String   @db.Uuid
+  assignedBy String?  @db.Uuid // Admin who assigned this role
+  assignedAt DateTime @default(now())
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedByUser User? @relation("AssignedByUser", fields: [assignedBy], references: [id])
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+// Permissions - Fine-grained action permissions
+model Permission {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resource    String   // auth, loans, wallets, etc.
+  action      String   // read, write, approve, etc.
+  description String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action])
+  @@index([resource])
+}
+
+// Role-Permission mapping - Many-to-many relationship
+model RolePermission {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  assignedAt   DateTime @default(now())
+
+  // Relations
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+}
+
+// Refresh Tokens - For token rotation
+model RefreshToken {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String    @db.Uuid
+  token           String    @unique // Hashed token
+  expiresAt       DateTime
+  revokedAt       DateTime? // When token was revoked (invalidated)
+  deviceFingerprint String?  // Hash of User-Agent + IP
+  createdAt       DateTime  @default(now())
+
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Password Reset Tokens - For forgot password flow
+model PasswordResetToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @db.Uuid
+  token     String    @unique // Hashed token
+  expiresAt DateTime
+  usedAt    DateTime? // When token was used to reset password
+  createdAt DateTime  @default(now())
+
+  // Relations
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Email Verification Tokens - For email verification flow
+model EmailVerificationToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @db.Uuid
+  token     String    @unique // Hashed token
+  expiresAt DateTime
+  verifiedAt DateTime? // When email was verified
+  createdAt DateTime  @default(now())
+
+  // Relations
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Farmer Profiles - Extended farmer information
+model FarmerProfile {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String   @unique @db.Uuid
+  nationalId      String?  // Encrypted in application layer
+  dateOfBirth     DateTime?
+  county          String?
+  subCounty       String?
+  farmSizeAcres   Float?
+  primaryCommodity String?
+  photoUrl        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Organizations - Warehouses, Financial Institutions
+model Organization {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  type        String   // WAREHOUSE, FINANCIAL_INSTITUTION
+  licenseNo   String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  warehouses  Warehouse[]
+
+  @@index([type])
+  @@index([status])
+}
+
+// Warehouses - Storage locations for commodity receipts
+model Warehouse {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String   @db.Uuid
+  name            String
+  location        String
+  gpsLat          Float?
+  gpsLng          Float?
+  capacityMt      Float?   // Capacity in metric tons
+  registryCode    String?  @unique
+  certified       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  receipts        WarehouseReceipt[]
+
+  @@index([organizationId])
+  @@index([registryCode])
+}
+
+// Commodities - Agricultural products
+model Commodity {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String   @unique
+  unit            String   // kg, bags, tons, etc.
+  standardGrades  Json?    // JSON array of accepted grades
+  currentPrice    Int?     // In minor currency units (KES cents)
+  priceUpdatedAt  DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  receipts        WarehouseReceipt[]
+  prices          MarketPrice[]
+
+  @@index([name])
+}
+
+// Warehouse Receipts - Collateral for loans
+model WarehouseReceipt {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  receiptNo       String   @unique
+  warehouseId     String   @db.Uuid
+  ownerId         String   @db.Uuid
+  commodityId     String   @db.Uuid
+  quantity        Float
+  grade           String?
+  valuation       Int?     // In minor currency units (KES cents)
+  status          String   @default("PENDING") // PENDING, VERIFIED, PLEDGED, RELEASED, CANCELLED
+  lienHolderId    String?  @db.Uuid // FI holding lien on receipt
+  registryRef     String?  // Reference from National WR Registry
+  pledgedAt       DateTime?
+  releasedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  owner           User      @relation(fields: [ownerId], references: [id])
+  commodity       Commodity @relation(fields: [commodityId], references: [id])
+  lienHolder      User?     @relation("LienHolder", fields: [lienHolderId], references: [id])
+
+  @@unique([receiptNo])
+  @@index([status])
+  @@index([ownerId])
+  @@index([warehouseId])
+}
+
+// Market Prices - Historical commodity prices
+model MarketPrice {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  commodityId     String   @db.Uuid
+  price           Int      // Current price in minor currency units
+  source          String?  // KACE, Manual, API, etc.
+  open            Int?
+  high            Int?
+  low             Int?
+  close           Int?
+  volume          Float?
+  date            DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  // Relations
+  commodity       Commodity @relation(fields: [commodityId], references: [id], onDelete: Cascade)
+
+  @@unique([commodityId, date])
+  @@index([commodityId])
+  @@index([date])
+}
+
+// KYC Documents - Know Your Customer documents
+model KycDocument {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @db.Uuid
+  docType     String   // NATIONAL_ID, PASSPORT, DRIVER_LICENSE, etc.
+  s3Key       String   // S3 path to document
+  status      String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  reviewedBy  String?  @db.Uuid
+  reviewNotes String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer    User?    @relation("ReviewedBy", fields: [reviewedBy], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+// Audit Logs - Track all sensitive operations
+model AuditLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entityType  String   // User, Loan, WarehouseReceipt, etc.
+  entityId    String   @db.Uuid
+  action      String   // create, update, delete, approve, reject
+  actorId     String?  @db.Uuid
+  ipAddress   String?
+  userAgent   String?
+  oldValue    Json?    // Previous state
+  newValue    Json?    // New state
+  createdAt   DateTime @default(now())
+
+  // Relations
+  actor       User?    @relation("actor", fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([createdAt])
+}

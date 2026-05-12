@@ -11,6 +11,12 @@
     "web:build": "nx build web",
     "docker:up": "docker-compose -f docker-compose.yml up -d",
     "docker:down": "docker-compose -f docker-compose.yml down",
+    "db:setup": "npm run docker:up && npm run db:migrate && npm run db:seed",
+    "db:migrate": "prisma migrate dev --name init",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
+    "db:reset": "prisma migrate reset --force",
+    "db:studio": "prisma studio",
     "lint": "nx run-many --target=lint",
     "test": "nx run-many --target=test"
   },
@@ -69,5 +75,8 @@
     "typescript": "~5.9.2",
     "typescript-eslint": "^8.40.0",
     "webpack-cli": "^5.1.4"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   }
 }

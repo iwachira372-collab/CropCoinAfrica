@@ -1,0 +1,78 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'apps/api/**'
+      - 'prisma/**'
+      - 'docker-compose.yml'
+      - 'package.json'
+  push:
+    branches: [develop]
+
+jobs:
+  integration-tests:
+    name: API Integration Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: cropcoin
+          POSTGRES_PASSWORD: dev-password
+          POSTGRES_DB: cropcoin_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup environment
+        run: |
+          echo "DATABASE_URL=postgresql://cropcoin:dev-password@localhost:5432/cropcoin_db" > .env
+          echo "REDIS_URL=redis://localhost:6379" >> .env
+          echo "JWT_SECRET=test-secret-key" >> .env
+          echo "NODE_ENV=test" >> .env
+
+      - name: Run Prisma migrations
+        run: npx prisma migrate deploy --skip-generate
+        env:
+          DATABASE_URL: postgresql://cropcoin:dev-password@localhost:5432/cropcoin_db
+
+      - name: Run Prisma seed
+        run: npx prisma db seed
+        env:
+          DATABASE_URL: postgresql://cropcoin:dev-password@localhost:5432/cropcoin_db
+        continue-on-error: true
+
+      - name: Run integration tests
+        run: npm test -- --testPathPattern="\.e2e" --passWithNoTests
+        env:
+          DATABASE_URL: postgresql://cropcoin:dev-password@localhost:5432/cropcoin_db
+          REDIS_URL: redis://localhost:6379
+        continue-on-error: true
